@@ -1,4 +1,5 @@
 # USTH ICT Advanced Programming with HPC 2024
 
-- Name: ```your name here```
+- Name: ```Nguyen Ngoc Hai```
+- StudentID: M23ICT004
 
