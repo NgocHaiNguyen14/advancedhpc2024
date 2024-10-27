@@ -2,17 +2,104 @@ import numpy as np
 from numba import cuda, float32
 from PIL import Image
 import matplotlib.pyplot as plt
+import time
 
+################################################################
+def rgb_to_hsv_cpu(rgb_image):
+    h = np.zeros((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32)
+    s = np.zeros((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32)
+    v = np.zeros((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32)
+    
+    for x in range(rgb_image.shape[0]):
+        for y in range(rgb_image.shape[1]):
+            r, g, b = rgb_image[x, y] / 255.0
+            max_val = max(r, g, b)
+            min_val = min(r, g, b)
+            delta = max_val - min_val
+            
+            # Calculate H
+            if delta == 0:
+                h[x, y] = 0
+            elif max_val == r:
+                h[x, y] = (60 * ((g - b) / delta) + 360) % 360
+            elif max_val == g:
+                h[x, y] = (60 * ((b - r) / delta) + 120) % 360
+            elif max_val == b:
+                h[x, y] = (60 * ((r - g) / delta) + 240) % 360
+                
+            # Calculate S and V
+            s[x, y] = 0 if max_val == 0 else delta / max_val
+            v[x, y] = max_val
+            
+    return h, s, v
+
+# CPU HSV to RGB conversion
+def hsv_to_rgb_cpu(h, s, v):
+    rgb_image = np.zeros((h.shape[0], h.shape[1], 3), dtype=np.float32)
+    
+    for x in range(h.shape[0]):
+        for y in range(h.shape[1]):
+            H, S, V = h[x, y], s[x, y], v[x, y]
+            C = V * S
+            X = C * (1 - abs((H / 60) % 2 - 1))
+            m = V - C
+            
+            if H < 60:
+                r, g, b = C, X, 0
+            elif H < 120:
+                r, g, b = X, C, 0
+            elif H < 180:
+                r, g, b = 0, C, X
+            elif H < 240:
+                r, g, b = 0, X, C
+            elif H < 300:
+                r, g, b = X, 0, C
+            else:
+                r, g, b = C, 0, X
+                
+            rgb_image[x, y] = [(r + m) * 255, (g + m) * 255, (b + m) * 255]
+    
+    return rgb_image
+
+# Timing and testing function
+def test_rgb_hsv_conversion(image_path):
+    # Load image
+    rgb_image = load_image(image_path)
+    print("Image loaded successfully:", rgb_image.shape)
+    
+    # GPU RGB to HSV
+    start_gpu_rgb2hsv = time.time()
+    h_gpu, s_gpu, v_gpu = rgb_to_hsv_aos_to_soa(rgb_image)
+    gpu_rgb2hsv_time = time.time() - start_gpu_rgb2hsv
+    print("GPU RGB to HSV time:", gpu_rgb2hsv_time)
+
+    # CPU RGB to HSV
+    start_cpu_rgb2hsv = time.time()
+    h_cpu, s_cpu, v_cpu = rgb_to_hsv_cpu(rgb_image)
+    cpu_rgb2hsv_time = time.time() - start_cpu_rgb2hsv
+    print("CPU RGB to HSV time:", cpu_rgb2hsv_time)
+    
+    # GPU HSV to RGB
+    start_gpu_hsv2rgb = time.time()
+    converted_rgb_image_gpu = hsv_to_rgb_soa_to_aos(h_gpu, s_gpu, v_gpu, rgb_image.shape)
+    gpu_hsv2rgb_time = time.time() - start_gpu_hsv2rgb
+    print("GPU HSV to RGB time:", gpu_hsv2rgb_time)
+
+    # CPU HSV to RGB
+    start_cpu_hsv2rgb = time.time()
+    converted_rgb_image_cpu = hsv_to_rgb_cpu(h_cpu, s_cpu, v_cpu)
+    cpu_hsv2rgb_time = time.time() - start_cpu_hsv2rgb
+    print("CPU HSV to RGB time:", cpu_hsv2rgb_time)
+    
+
+################################################################
 @cuda.jit
 def RGB2HSV(rgb, H, S, V):
     x, y = cuda.grid(2)
     if x < rgb.shape[0] and y < rgb.shape[1]:
-        # Read RGB values and normalize to [0, 1]
         r = rgb[x, y, 0] / 255.0
         g = rgb[x, y, 1] / 255.0
         b = rgb[x, y, 2] / 255.0
-
-        # Find max, min, and delta
         max_val = max(r, g, b)
         min_val = min(r, g, b)
         delta = max_val - min_val
@@ -63,12 +150,10 @@ def HSV2RGB(H, S, V, rgb):
         else:
             r, g, b = c, 0, x_val
 
-        # Scale back to [0, 255] and store in AoS format
         rgb[x, y, 0] = (r + m) * 255
         rgb[x, y, 1] = (g + m) * 255
         rgb[x, y, 2] = (b + m) * 255
 
-# Function to perform RGB to HSV conversion
 def rgb_to_hsv_aos_to_soa(rgb_image):
     # Allocate arrays for H, S, V
     h = np.zeros((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32)
@@ -87,15 +172,10 @@ def rgb_to_hsv_aos_to_soa(rgb_image):
 
 # Function to perform HSV to RGB conversion
 def hsv_to_rgb_soa_to_aos(h, s, v, shape):
-    # Allocate the output RGB array in AoS format
     rgb_image = np.zeros((shape[0], shape[1], 3), dtype=np.float32)
-
-    # Define grid and block sizes
     threads_per_block = (16, 16)
     blocks_per_grid_x = (shape[0] + threads_per_block[0] - 1) // threads_per_block[0]
     blocks_per_grid_y = (shape[1] + threads_per_block[1] - 1) // threads_per_block[1]
-
-    # Launch the HSV2RGB kernel
     HSV2RGB[(blocks_per_grid_x, blocks_per_grid_y), threads_per_block](h, s, v, rgb_image)
     
     return rgb_image
@@ -124,21 +204,56 @@ def display_images(original, hsv_image, converted_image):
     
     plt.show()
     
+
 def test_rgb_hsv_conversion(image_path):
-    # Load image
     rgb_image = load_image(image_path)
     print("Image loaded successfully:", rgb_image.shape)
+    start_gpu_rgb2hsv = time.time()
+    h_gpu, s_gpu, v_gpu = rgb_to_hsv_aos_to_soa(rgb_image)
+    gpu_rgb2hsv_time = time.time() - start_gpu_rgb2hsv
+    print("GPU RGB to HSV time:", gpu_rgb2hsv_time)
+    start_cpu_rgb2hsv = time.time()
+    h_cpu, s_cpu, v_cpu = rgb_to_hsv_cpu(rgb_image)
+    cpu_rgb2hsv_time = time.time() - start_cpu_rgb2hsv
+    print("CPU RGB to HSV time:", cpu_rgb2hsv_time)
+    start_gpu_hsv2rgb = time.time()
+    converted_rgb_image_gpu = hsv_to_rgb_soa_to_aos(h_gpu, s_gpu, v_gpu, rgb_image.shape)
+    gpu_hsv2rgb_time = time.time() - start_gpu_hsv2rgb
+    print("GPU HSV to RGB time:", gpu_hsv2rgb_time)
+    start_cpu_hsv2rgb = time.time()
+    converted_rgb_image_cpu = hsv_to_rgb_cpu(h_cpu, s_cpu, v_cpu)
+    cpu_hsv2rgb_time = time.time() - start_cpu_hsv2rgb
+    print("CPU HSV to RGB time:", cpu_hsv2rgb_time)
+
+    # Display the images and print time comparisons
+    display_images(rgb_image, (h_gpu, s_gpu, v_gpu), converted_rgb_image_gpu)
     
-    # Perform RGB (AoS) to HSV (SoA) conversion
-    h, s, v = rgb_to_hsv_aos_to_soa(rgb_image)
-    print("RGB to HSV conversion complete.")
+    # Plotting execution times
+    labels = ['RGB to HSV', 'HSV to RGB']
+    gpu_times = [gpu_rgb2hsv_time, gpu_hsv2rgb_time]
+    cpu_times = [cpu_rgb2hsv_time, cpu_hsv2rgb_time]
+    
+    x = np.arange(len(labels))
+    width = 0.35
 
-    # Convert back from HSV (SoA) to RGB (AoS)
-    converted_rgb_image = hsv_to_rgb_soa_to_aos(h, s, v, rgb_image.shape)
-    print("HSV to RGB conversion complete.")
+    fig, ax = plt.subplots()
+    bars1 = ax.bar(x - width/2, gpu_times, width, label='GPU')
+    bars2 = ax.bar(x + width/2, cpu_times, width, label='CPU')
 
-    # Display the results
-    display_images(rgb_image, (h, s, v), converted_rgb_image)
+    # Labels and formatting
+    ax.set_xlabel('Conversion Type')
+    ax.set_ylabel('Execution Time (seconds)')
+    ax.set_title('Execution Time Comparison: GPU vs. CPU')
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels)
+    ax.legend()
+
+    # Display time values on top of bars
+    for bar in bars1 + bars2:
+        yval = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width() / 2, yval, f'{yval:.2f}', ha='center', va='bottom')
+
+    plt.show()
 
 ################################################################
 
