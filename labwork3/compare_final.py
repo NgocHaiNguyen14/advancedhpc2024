@@ -44,9 +44,9 @@ def process_image(img):
     return gray_img_cpu, gray_img_gpu, cpu_time, gpu_time
 
 # load the images
-img1 = plt.imread('low_reso.jpeg') #image with low resoluotion
+img3 = plt.imread('low_reso.jpeg') #image with low resoluotion
 img2 = plt.imread('high_reso.jpg') #image with medium resolution
-img3 = plt.imread('highest_reso.jpeg') #imgae with high resolution
+img1 = plt.imread('highest_reso.jpeg') #imgae with high resolution
 
 # print resolutions of the images
 print(f"Resolution of image 1: {img1.shape[1]} x {img1.shape[0]}")
