@@ -194,7 +194,16 @@ end = time.time()
 
 print(f"Filtered image in {end - start} seconds.")
 
+plt.subplot(1, 2, 1)
+plt.imshow(img_data)
+plt.title("Original Image")
+plt.axis('off')  # Turn off axis
+
+# Display the filtered image
+plt.subplot(1, 2, 2)
 plt.imshow(filtered_img)
 plt.title("Filtered Image (Kuwahara)")
 plt.axis('off')  # Turn off axis
+
+# Show both images
 plt.show()
